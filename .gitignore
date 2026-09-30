@@ -36,3 +36,7 @@ next-env.d.ts
 **/npm-debug.log*
 **/yarn-debug.log*
 **/yarn-error.log*
+# --- Base de datos local ---
+*.db
+*.db-journal
+CLAUDE.md
