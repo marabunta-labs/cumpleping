@@ -1,11 +1,15 @@
 import os
 import urllib.parse
+import csv
+import io
+import pytz
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, CopyTextButton
 from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, CallbackQueryHandler, filters
+from telegram.error import BadRequest
 from datetime import datetime
 import random
-from database import agregar_cumple, obtener_cumples_hoy, obtener_cumple_por_id, borrar_cumple
+from database import *
 from mensajes import SUGERENCIAS
 
 NOMBRE, MES, DIA, PREGUNTA_ANIO, SELECCIONAR_ANIO, CATEGORIA, PREGUNTA_TELEFONO, RECIBIR_TELEFONO = range(8)
@@ -15,14 +19,14 @@ TOKEN = os.getenv("TOKEN")
 
 # --- BÁSICOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    teclado = [[InlineKeyboardButton("➕ Añadir Cumpleaños", callback_data="start_nuevo")]]
+    teclado = [
+        [InlineKeyboardButton("➕ Añadir Cumpleaños", callback_data="start_nuevo")],
+        [InlineKeyboardButton("🗂️ Ver mis cumpleaños", callback_data="start_listar")]
+    ]
     await update.message.reply_text(
-        "¡Hola! Soy Cumpleping 🎂.\nTe ayudaré a recordar todos los cumpleaños y te sugeriré cómo felicitarlos.",
+        "¡Hola! Soy Cumpleping 🎂.\nTe ayudaré a recordar todos los cumpleaños y te sugeriré cómo felicitarlos.\n\nUsa el menú o los comandos como /nuevo, /listar o /ajustes.",
         reply_markup=InlineKeyboardMarkup(teclado)
     )
-
-async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("¡Pong! 🏓 Estoy vivo.")
 
 # --- FLUJO DE CREACIÓN ---
 async def nuevo_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -39,7 +43,7 @@ async def nuevo_nombre(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Julio", callback_data="mes_07"), InlineKeyboardButton("Agosto", callback_data="mes_08"), InlineKeyboardButton("Septiembre", callback_data="mes_09")],
         [InlineKeyboardButton("Octubre", callback_data="mes_10"), InlineKeyboardButton("Noviembre", callback_data="mes_11"), InlineKeyboardButton("Diciembre", callback_data="mes_12")]
     ]
-    await update.message.reply_text(f"Perfecto, guardaré a {context.user_data['nombre']}.\n\n¿En qué mes nació?", reply_markup=InlineKeyboardMarkup(teclado))
+    await update.message.reply_text(f"Guardaré a {context.user_data['nombre']}.\n\n¿En qué mes nació?", reply_markup=InlineKeyboardMarkup(teclado))
     return MES
 
 async def recibir_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -47,7 +51,6 @@ async def recibir_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     mes = query.data.split('_')[1] 
     context.user_data['mes'] = mes
-    
     max_dias = 31 if mes in ['01', '03', '05', '07', '08', '10', '12'] else (30 if mes in ['04', '06', '09', '11'] else 29)
     botones_dias = []
     fila = []
@@ -57,7 +60,6 @@ async def recibir_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             botones_dias.append(fila)
             fila = []
     if fila: botones_dias.append(fila)
-        
     await query.edit_message_text(text="Genial. ¿Qué día?", reply_markup=InlineKeyboardMarkup(botones_dias))
     return DIA
 
@@ -71,8 +73,7 @@ async def recibir_dia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PREGUNTA_ANIO
 
 def generar_teclado_anios(año_inicio):
-    botones = []
-    fila = []
+    botones, fila = [], []
     for i in range(12): 
         año_actual = año_inicio + i
         fila.append(InlineKeyboardButton(str(año_actual), callback_data=f"anio_{año_actual}"))
@@ -107,7 +108,7 @@ async def recibir_anio_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def mostrar_teclado_categoria(mensaje_o_query):
     teclado = [[InlineKeyboardButton("👨‍👩‍👧 Familia", callback_data="Familia"), InlineKeyboardButton("🍻 Amigos", callback_data="Amigos")],
                [InlineKeyboardButton("💼 Trabajo", callback_data="Trabajo"), InlineKeyboardButton("🤷 Ninguna", callback_data="Ninguna")]]
-    texto = "¡Año guardado! ¿En qué categoría lo guardamos?"
+    texto = "¿En qué categoría lo guardamos?"
     try: await mensaje_o_query.edit_message_text(text=texto, reply_markup=InlineKeyboardMarkup(teclado))
     except: await mensaje_o_query.reply_text(text=texto, reply_markup=InlineKeyboardMarkup(teclado))
     return CATEGORIA
@@ -117,7 +118,7 @@ async def recibir_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     context.user_data['categoria'] = query.data
     teclado = [[InlineKeyboardButton("Sí, añadir número", callback_data="si_tel")], [InlineKeyboardButton("No, terminar", callback_data="no_tel")]]
-    await query.edit_message_text("Última pregunta: ¿Quieres añadir su teléfono para enviarle el WhatsApp directo con 1 clic?", reply_markup=InlineKeyboardMarkup(teclado))
+    await query.edit_message_text("¿Quieres añadir su teléfono para enviarle mensajes directos?", reply_markup=InlineKeyboardMarkup(teclado))
     return PREGUNTA_TELEFONO
 
 def generar_teclado_numpad():
@@ -134,7 +135,7 @@ async def preguntar_telefono_callback(update: Update, context: ContextTypes.DEFA
     await query.answer()
     if query.data == "si_tel":
         context.user_data['telefono_temp'] = "+34"
-        texto = f"Usa el teclado, escríbelo, o **comparte un contacto** desde tu agenda 📎:\n\n📱 Número: `{context.user_data['telefono_temp']}`"
+        texto = f"Usa el teclado, escríbelo o **comparte un contacto** 📎:\n\n📱 Número: `{context.user_data['telefono_temp']}`"
         await query.edit_message_text(text=texto, reply_markup=generar_teclado_numpad(), parse_mode="Markdown")
         return RECIBIR_TELEFONO
     else:
@@ -154,7 +155,7 @@ async def manejar_teclado_telefono(update: Update, context: ContextTypes.DEFAULT
     else:
         context.user_data['telefono_temp'] += accion
         
-    texto = f"Usa el teclado, escríbelo, o **comparte un contacto** desde tu agenda 📎:\n\n📱 Número: `{context.user_data['telefono_temp']}`"
+    texto = f"Usa el teclado, escríbelo o **comparte un contacto** 📎:\n\n📱 Número: `{context.user_data['telefono_temp']}`"
     await query.edit_message_text(text=texto, reply_markup=generar_teclado_numpad(), parse_mode="Markdown")
     return RECIBIR_TELEFONO
 
@@ -171,8 +172,7 @@ async def guardar_y_terminar(mensaje_o_query, context):
     except: chat_id = mensaje_o_query.chat_id 
     agregar_cumple(chat_id, context.user_data['nombre'], context.user_data['fecha'], context.user_data['anio'], context.user_data['categoria'], context.user_data['telefono'])
     
-    resumen = f"✅ ¡Guardado con éxito!\n\n👤 {context.user_data['nombre']}\n📅 {context.user_data['fecha']}\n🗓️ Año: {context.user_data['anio']}\n🏷️ Categoría: {context.user_data['categoria']}"
-    if context.user_data['telefono']: resumen += f"\n📱 Teléfono: +{context.user_data['telefono']}"
+    resumen = f"✅ ¡Guardado con éxito!\n\n👤 {context.user_data['nombre']}\n📅 {context.user_data['fecha']}"
     try: await mensaje_o_query.edit_message_text(text=resumen)
     except: await mensaje_o_query.reply_text(text=resumen)
     return ConversationHandler.END
@@ -181,59 +181,171 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Creación cancelada.")
     return ConversationHandler.END
 
-# --- COMANDOS Y ALARMA ---
-async def borrar_cumple_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args: return await update.message.reply_text("⚠️ Uso: /borrar [Nombre]")
-    nombre = " ".join(context.args)
-    if borrar_cumple(update.message.chat_id, nombre): await update.message.reply_text(f"🗑️ Eliminado {nombre}.")
-    else: await update.message.reply_text(f"❌ No encontré a '{nombre}'.")
 
-async def cumples_hoy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cumpleañeros = obtener_cumples_hoy(datetime.now().strftime("%d/%m"))
-    if not cumpleañeros: return await update.message.reply_text("Hoy no hay cumpleaños. ¡Día libre! 🏖️")
-    mensaje = "🎉 **¡Cumpleaños de hoy!** 🎉\n\n"
-    for id_bd, chat_id, nombre, fecha, anio, categoria, telefono in cumpleañeros:
-        if anio != "Desconocido" and str(anio).isdigit(): mensaje += f"🎂 {nombre} cumple {datetime.now().year - int(anio)} años\n"
-        else: mensaje += f"🎂 {nombre} cumple años hoy\n"
-    await update.message.reply_text(mensaje, parse_mode="Markdown")
+# --- MENÚ LISTAR Y CONSULTAS ---
+async def listar_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mensaje = update.callback_query.message if update.callback_query else update.message
+    if update.callback_query: await update.callback_query.answer()
     
-def generar_mensaje_y_teclado(id_cumple, nombre, anio, categoria, telefono):
+    teclado = [
+        [InlineKeyboardButton("📅 Próximos 30 días", callback_data="list_proximos")],
+        [InlineKeyboardButton("🗓️ Este mes", callback_data="list_mes")],
+        [InlineKeyboardButton("🗂️ Todos", callback_data="list_todos")]
+    ]
+    await mensaje.reply_text("¿Qué cumpleaños quieres consultar?", reply_markup=InlineKeyboardMarkup(teclado))
+
+async def manejar_listar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    filtro = query.data.split('_')[1]
+    
+    cumples = obtener_cumples_por_usuario(query.message.chat_id)
+    if not cumples:
+        return await query.edit_message_text("No tienes ningún cumpleaños guardado. ¡Usa /nuevo!")
+        
+    hoy = datetime.now()
+    hoy_solo_fecha = datetime(hoy.year, hoy.month, hoy.day)
+    
+    def dias_faltan(fecha_str):
+        dia, mes = int(fecha_str.split('/')[0]), int(fecha_str.split('/')[1])
+        cumple = datetime(hoy.year, mes, dia)
+        if cumple < hoy_solo_fecha:
+            cumple = datetime(hoy.year + 1, mes, dia)
+        return (cumple - hoy_solo_fecha).days
+
+    cumples_ordenados = sorted(cumples, key=lambda x: dias_faltan(x[2]))
+    
+    if filtro == "proximos":
+        filtrados = [c for c in cumples_ordenados if dias_faltan(c[2]) <= 30]
+        titulo = "📅 *Próximos 30 días:*\n\nToca un nombre para gestionarlo:"
+    elif filtro == "mes":
+        filtrados = [c for c in cumples_ordenados if c[2].split('/')[1] == hoy.strftime("%m")]
+        titulo = f"🗓️ *Cumpleaños de este mes:*\n\nToca un nombre para gestionarlo:"
+    else:
+        filtrados = cumples_ordenados
+        titulo = "🗂️ *Todos tus cumpleaños:*\n\nToca un nombre para gestionarlo:"
+
+    if not filtrados:
+        await query.edit_message_text("No hay cumpleaños en este filtro. 🏖️️", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Volver", callback_data="list_volver")]]))
+        return
+
+    # NUEVO: Convertimos la lista de texto en botones interactivos
+    teclado = []
+    for c in filtrados:
+        id_bd, nombre, fecha = c[0], c[1], c[2]
+        faltan = dias_faltan(fecha)
+        texto_dias = "¡ES HOY!" if faltan == 0 else ("Mañana" if faltan == 1 else f"en {faltan}d")
+        teclado.append([InlineKeyboardButton(f"{nombre} - {fecha} ({texto_dias})", callback_data=f"ver_{id_bd}")])
+    
+    teclado.append([InlineKeyboardButton("🔙 Volver", callback_data="list_volver")])
+    await query.edit_message_text(text=titulo, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(teclado))
+
+async def ver_perfil_cumple(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    id_cumple = int(query.data.split('_')[1])
+    datos = obtener_cumple_por_id(id_cumple)
+    
+    if not datos:
+        return await query.edit_message_text("❌ Error: Perfil no encontrado.")
+        
+    id_bd, chat_id, nombre, fecha, anio, categoria, telefono = datos
+    
+    perfil = f"👤 *Perfil de {nombre}*\n\n"
+    perfil += f"📅 Fecha: {fecha}\n"
+    perfil += f"🗓️ Año: {anio}\n"
+    perfil += f"🏷️ Categoría: {categoria}\n"
+    perfil += f"📱 Teléfono: {telefono if telefono else 'No guardado'}"
+    
+    teclado = [
+        [InlineKeyboardButton("🗑️ Borrar", callback_data=f"borrar_{id_bd}")],
+        [InlineKeyboardButton("🔙 Volver a la lista", callback_data="list_todos")]
+    ]
+    await query.edit_message_text(text=perfil, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(teclado))
+
+async def borrar_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    id_cumple = int(query.data.split('_')[1])
+    borrar_cumple_por_id(id_cumple)
+    
+    teclado = [[InlineKeyboardButton("🔙 Volver a la lista", callback_data="list_todos")]]
+    await query.edit_message_text("🗑️ Cumpleaños eliminado correctamente.", reply_markup=InlineKeyboardMarkup(teclado))
+
+
+# --- AJUSTES Y EXPORTAR ---
+async def ajustes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    hora_actual = obtener_preferencia(update.message.chat_id)
+    teclado = [
+        [InlineKeyboardButton("09:00", callback_data="hora_09:00"), InlineKeyboardButton("10:00", callback_data="hora_10:00")],
+        [InlineKeyboardButton("12:00", callback_data="hora_12:00"), InlineKeyboardButton("18:00", callback_data="hora_18:00")]
+    ]
+    mensaje = f"⚙️ *Ajustes de Alarma*\n\nActualmente el bot te avisa a las: *{hora_actual}*\n\n¿A qué hora prefieres que te avise?"
+    await update.message.reply_text(mensaje, reply_markup=InlineKeyboardMarkup(teclado), parse_mode="Markdown")
+
+async def guardar_hora(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    nueva_hora = query.data.split('_')[1]
+    guardar_preferencia(query.message.chat_id, nueva_hora)
+    await query.edit_message_text(f"✅ ¡Hecho! Te avisaré de los cumpleaños a las {nueva_hora} (Hora de España).")
+
+async def exportar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    cumples = obtener_cumples_por_usuario(chat_id)
+    
+    if not cumples:
+        return await update.message.reply_text("No tienes cumpleaños guardados para exportar.")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Nombre', 'Fecha', 'Año', 'Categoría', 'Teléfono'])
+    
+    for c in cumples:
+        writer.writerow([c[1], c[2], c[3], c[4], c[5]])
+
+    output.seek(0)
+    await context.bot.send_document(
+        chat_id=chat_id,
+        document=output.getvalue().encode('utf-8'),
+        filename="mis_cumpleaños.csv",
+        caption="📊 Aquí tienes la copia de seguridad de todos tus cumpleaños para abrir en Excel."
+    )
+
+
+# --- ALARMA DE PRODUCCIÓN (TICK POR MINUTO) ---
+def generar_mensaje_y_teclado(id_cumple, nombre, anio, categoria, telefono, texto_anterior=""):
     año_actual = datetime.now().year
     mensaje = f"🔔 *¡RECORDATORIO AUTOMÁTICO!*\n\n"
     if anio != "Desconocido" and str(anio).isdigit(): 
         mensaje += f"Hoy es el cumpleaños de {nombre} ({año_actual - int(anio)} años) 🎂\n"
     else: 
         mensaje += f"Hoy es el cumpleaños de {nombre} 🎂\n"
-    mensaje += f"Categoría: {categoria}\n\n"
     
     teclado_alarma = []
     if categoria in SUGERENCIAS:
-        idea = random.choice(SUGERENCIAS[categoria])
-        # Ya no usamos las comillas invertidas (```) porque tenemos botón
-        mensaje += f"💡 *Sugerencia:*\n{idea}\n"
+        opciones = SUGERENCIAS[categoria]
+        if len(opciones) > 1 and texto_anterior:
+            opciones_validas = [opt for opt in opciones if opt not in texto_anterior]
+            idea = random.choice(opciones_validas) if opciones_validas else random.choice(opciones)
+        else:
+            idea = random.choice(opciones)
+            
+        mensaje += f"\n💡 *Sugerencia:*\n{idea}\n"
+        texto_codificado = urllib.parse.quote_plus(idea)
         
-        texto_codificado = urllib.parse.quote(idea)
-        
-        # Fila 1: Botón de COPIAR y Botón de CAMBIAR
         teclado_alarma.append([
-            InlineKeyboardButton("📋 Copiar", copy_text=CopyTextButton(text=idea)),
-            InlineKeyboardButton("🔄 Otra opción", callback_data=f"otra_{id_cumple}")
+            InlineKeyboardButton("📋 Copiar mensaje", copy_text=CopyTextButton(text=idea)),
+            InlineKeyboardButton("🔄 Generar otro", callback_data=f"otra_{id_cumple}")
         ])
         
-        # Fila 2: Botones de envío
         botones_envio = []
         if telefono and telefono != "":
-            # Si hay teléfono, WA pre-rellena, TG abre el chat directo (para que pegues)
-            link_wa = f"[https://wa.me/](https://wa.me/){telefono}?text={texto_codificado}"
-            link_tg = f"[https://t.me/](https://t.me/)+{telefono}"
-            botones_envio.append(InlineKeyboardButton("🟢 WhatsApp", url=link_wa))
-            botones_envio.append(InlineKeyboardButton("🔵 Telegram", url=link_tg))
+            botones_envio.append(InlineKeyboardButton("🟢 WhatsApp", url=f"https://api.whatsapp.com/send?phone={telefono}&text={texto_codificado}"))
+            botones_envio.append(InlineKeyboardButton("🔵 Telegram", url=f"https://t.me/+{telefono}?text={texto_codificado}"))
         else:
-            # Si no hay teléfono, ambos abren el menú genérico de compartir
-            link_wa = f"[https://wa.me/?text=](https://wa.me/?text=){texto_codificado}"
-            link_tg = f"[https://t.me/share/url?url=](https://t.me/share/url?url=){texto_codificado}"
-            botones_envio.append(InlineKeyboardButton("🟢 WhatsApp", url=link_wa))
-            botones_envio.append(InlineKeyboardButton("🔵 Compartir TG", url=link_tg))
+            botones_envio.append(InlineKeyboardButton("🟢 WhatsApp", url=f"https://api.whatsapp.com/send?text={texto_codificado}"))
+            botones_envio.append(InlineKeyboardButton("🔵 Compartir TG", url=f"https://t.me/share/url?url={texto_codificado}"))
             
         teclado_alarma.append(botones_envio)
         
@@ -241,25 +353,54 @@ def generar_mensaje_y_teclado(id_cumple, nombre, anio, categoria, telefono):
 
 async def cambiar_sugerencia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     id_cumple = int(query.data.split('_')[1])
     datos = obtener_cumple_por_id(id_cumple)
     if datos:
         id_bd, chat_id, nombre, fecha, anio, categoria, telefono = datos
-        mensaje, teclado = generar_mensaje_y_teclado(id_bd, nombre, anio, categoria, telefono)
-        await query.edit_message_text(text=mensaje, reply_markup=teclado, parse_mode="Markdown")
+        texto_anterior = query.message.text or ""
+        mensaje, teclado = generar_mensaje_y_teclado(id_bd, nombre, anio, categoria, telefono, texto_anterior)
+        try:
+            await query.edit_message_text(text=mensaje, reply_markup=teclado, parse_mode="Markdown")
+            await query.answer() 
+        except BadRequest:
+            await query.answer()
 
-async def alarma_diaria(context: ContextTypes.DEFAULT_TYPE):
-    cumpleañeros = obtener_cumples_hoy(datetime.now().strftime("%d/%m"))
-    for id_bd, chat_id, nombre, fecha, anio, categoria, telefono in cumpleañeros:
-        mensaje, teclado = generar_mensaje_y_teclado(id_bd, nombre, anio, categoria, telefono)
-        await context.bot.send_message(chat_id=chat_id, text=mensaje, parse_mode="Markdown", reply_markup=teclado)
+async def tick_alarmas(context: ContextTypes.DEFAULT_TYPE):
+    # Forzamos la zona horaria a España para evitar errores en servidores extranjeros
+    zona_horaria = pytz.timezone('Europe/Madrid')
+    ahora = datetime.now(zona_horaria)
+    hora_actual = ahora.strftime("%H:%M")
+    dia_mes_actual = ahora.strftime("%d/%m")
+
+    cumples_hoy = obtener_cumples_hoy(dia_mes_actual)
+    if not cumples_hoy: return
+
+    # Agrupamos por usuario
+    usuarios_hoy = {}
+    for c in cumples_hoy:
+        chat_id = c[1]
+        if chat_id not in usuarios_hoy:
+            usuarios_hoy[chat_id] = []
+        usuarios_hoy[chat_id].append(c)
+
+    # Revisamos si es la hora preferida de cada usuario
+    for chat_id, lista_cumples in usuarios_hoy.items():
+        pref_hora = obtener_preferencia(chat_id)
+        if pref_hora == hora_actual:
+            for c in lista_cumples:
+                id_bd, _, nombre, fecha, anio, categoria, telefono = c
+                mensaje, teclado = generar_mensaje_y_teclado(id_bd, nombre, anio, categoria, telefono)
+                await context.bot.send_message(chat_id=chat_id, text=mensaje, parse_mode="Markdown", reply_markup=teclado)
+
 
 if __name__ == '__main__':
     app = Application.builder().token(TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ping", ping))
+    app.add_handler(CommandHandler("exportar", exportar_cmd))
+    app.add_handler(CommandHandler("ajustes", ajustes_cmd))
+    app.add_handler(CallbackQueryHandler(guardar_hora, pattern="^hora_"))
     
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('nuevo', nuevo_inicio), CallbackQueryHandler(nuevo_inicio, pattern="^start_nuevo$")],
@@ -281,12 +422,18 @@ if __name__ == '__main__':
     )
     
     app.add_handler(conv_handler)
-    app.add_handler(CommandHandler("borrar", borrar_cumple_cmd))
-    app.add_handler(CommandHandler("hoy", cumples_hoy))
     
-    # Manejador para el botón de "Otra opción"
+    # Manejadores del Listado
+    app.add_handler(CommandHandler("listar", listar_inicio))
+    app.add_handler(CallbackQueryHandler(listar_inicio, pattern="^start_listar$"))
+    app.add_handler(CallbackQueryHandler(volver_listar, pattern="^list_volver$"))
+    app.add_handler(CallbackQueryHandler(manejar_listar, pattern="^list_(proximos|mes|todos)$"))
+    app.add_handler(CallbackQueryHandler(ver_perfil_cumple, pattern="^ver_"))
+    app.add_handler(CallbackQueryHandler(borrar_inline, pattern="^borrar_"))
+    
     app.add_handler(CallbackQueryHandler(cambiar_sugerencia, pattern="^otra_"))
     
-    print("Bot Cumpleping iniciado...")
-    app.job_queue.run_repeating(alarma_diaria, interval=10, first=5)
+    print("Bot Cumpleping iniciado y funcionando en modo Producción...")
+    # El bot comprobará la base de datos cada 60 segundos
+    app.job_queue.run_repeating(tick_alarmas, interval=60, first=5)
     app.run_polling()

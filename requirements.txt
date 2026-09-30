@@ -8,5 +8,6 @@ httpx==0.28.1
 idna==3.19
 python-dotenv==1.2.1
 python-telegram-bot==22.5
+pytz==2026.4
 typing-extensions==4.16.0
 tzlocal==5.3.1

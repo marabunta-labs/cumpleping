@@ -3,6 +3,7 @@ import sqlite3
 def crear_base_datos():
     conexion = sqlite3.connect('cumpleping.db')
     cursor = conexion.cursor()
+    # Tabla de cumpleaños
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS cumpleaños (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -12,6 +13,13 @@ def crear_base_datos():
             anio TEXT,
             categoria TEXT,
             telefono TEXT
+        )
+    ''')
+    # NUEVA: Tabla de ajustes de usuario
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS preferencias (
+            chat_id INTEGER PRIMARY KEY,
+            hora_alarma TEXT
         )
     ''')
     conexion.commit()
@@ -31,7 +39,6 @@ def agregar_cumple(chat_id, nombre, fecha, anio, categoria, telefono):
 def obtener_cumples_hoy(dia_mes):
     conexion = sqlite3.connect('cumpleping.db')
     cursor = conexion.cursor()
-    # Ahora pedimos también el 'id' al principio
     cursor.execute('''
         SELECT id, chat_id, nombre, fecha, anio, categoria, telefono FROM cumpleaños 
         WHERE fecha LIKE ?
@@ -51,6 +58,18 @@ def obtener_cumple_por_id(id_cumple):
     conexion.close()
     return resultado
 
+def obtener_cumples_por_usuario(chat_id):
+    conexion = sqlite3.connect('cumpleping.db')
+    cursor = conexion.cursor()
+    cursor.execute('''
+        SELECT id, nombre, fecha, anio, categoria, telefono 
+        FROM cumpleaños 
+        WHERE chat_id = ?
+    ''', (chat_id,))
+    resultados = cursor.fetchall()
+    conexion.close()
+    return resultados
+
 def borrar_cumple(chat_id, nombre):
     conexion = sqlite3.connect('cumpleping.db')
     cursor = conexion.cursor()
@@ -67,6 +86,32 @@ def borrar_cumple(chat_id, nombre):
         conexion.commit()
     conexion.close()
     return existe
+
+def borrar_cumple_por_id(id_cumple):
+    conexion = sqlite3.connect('cumpleping.db')
+    cursor = conexion.cursor()
+    cursor.execute('DELETE FROM cumpleaños WHERE id = ?', (id_cumple,))
+    conexion.commit()
+    conexion.close()
+
+def obtener_preferencia(chat_id):
+    conexion = sqlite3.connect('cumpleping.db')
+    cursor = conexion.cursor()
+    cursor.execute('SELECT hora_alarma FROM preferencias WHERE chat_id = ?', (chat_id,))
+    resultado = cursor.fetchone()
+    conexion.close()
+    return resultado[0] if resultado else "09:00" # Por defecto a las 9 AM
+
+def guardar_preferencia(chat_id, hora_alarma):
+    conexion = sqlite3.connect('cumpleping.db')
+    cursor = conexion.cursor()
+    cursor.execute('''
+        INSERT INTO preferencias (chat_id, hora_alarma) 
+        VALUES (?, ?) 
+        ON CONFLICT(chat_id) DO UPDATE SET hora_alarma=excluded.hora_alarma
+    ''', (chat_id, hora_alarma))
+    conexion.commit()
+    conexion.close()
 
 if __name__ == '__main__':
     crear_base_datos()
