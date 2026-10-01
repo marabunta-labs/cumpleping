@@ -39,4 +39,5 @@ next-env.d.ts
 # --- Base de datos local ---
 *.db
 *.db-journal
+
 CLAUDE.md
