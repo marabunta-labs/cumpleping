@@ -5,6 +5,7 @@ Variables: PA_USERNAME, PA_PASSWORD, PA_API_TOKEN, CRONJOB_API_KEY. Falla (exit 
 """
 import json
 import os
+import re
 import sys
 import urllib.request
 from datetime import date, timedelta
@@ -41,8 +42,9 @@ def extend_pythonanywhere():
             page.get_by_role("button", name="Log in").click()
             page.wait_for_load_state("networkidle")
             page.goto(f"https://www.pythonanywhere.com/user/{USER}/webapps/")
-            page.get_by_text("Run until", exact=False).first.click()
+            page.get_by_role("button", name=re.compile("Run until")).first.click()
             page.wait_for_load_state("networkidle")
+            page.screenshot(path="keepalive-last.png", full_page=True)
         except Exception:
             page.screenshot(path="keepalive-error.png", full_page=True)
             raise

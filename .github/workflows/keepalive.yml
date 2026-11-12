@@ -22,8 +22,8 @@ jobs:
           PA_API_TOKEN: ${{ secrets.PA_API_TOKEN }}
           CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
       - uses: actions/upload-artifact@v4
-        if: failure()
-        with: { name: keepalive-error, path: keepalive-error.png, if-no-files-found: ignore }
+        if: always()
+        with: { name: keepalive-screens, path: 'keepalive-*.png', if-no-files-found: ignore }
       # GitHub desactiva los workflows programados tras 60 días sin actividad en el repo; esto reinicia ese contador.
       - run: gh workflow enable keepalive.yml
         env: { GH_TOKEN: '${{ github.token }}' }
