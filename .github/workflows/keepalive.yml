@@ -1,0 +1,29 @@
+# Mantiene Cumpleping activo: la web app gratuita de PythonAnywhere caduca cada mes si nadie pulsa
+# "Run until 1 month from today". Este workflow lo pulsa cada semana, comprueba la web y reactiva el job de cron-job.org.
+# Si algo falla, el run sale en rojo y GitHub avisa por email. Secretos: PA_USERNAME, PA_PASSWORD, PA_API_TOKEN, CRONJOB_API_KEY.
+name: keepalive
+on:
+  schedule: [{ cron: '23 6 * * 1' }]
+  workflow_dispatch:
+permissions:
+  actions: write
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install playwright && playwright install --with-deps chromium
+      - run: python .github/scripts/keepalive.py
+        env:
+          PA_USERNAME: ${{ secrets.PA_USERNAME }}
+          PA_PASSWORD: ${{ secrets.PA_PASSWORD }}
+          PA_API_TOKEN: ${{ secrets.PA_API_TOKEN }}
+          CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: keepalive-error, path: keepalive-error.png, if-no-files-found: ignore }
+      # GitHub desactiva los workflows programados tras 60 días sin actividad en el repo; esto reinicia ese contador.
+      - run: gh workflow enable keepalive.yml
+        env: { GH_TOKEN: '${{ github.token }}' }
