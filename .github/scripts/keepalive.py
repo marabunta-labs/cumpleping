@@ -38,7 +38,7 @@ def extend_pythonanywhere():
             page.goto("https://www.pythonanywhere.com/login/")
             page.fill('input[name="auth-username"]', USER)
             page.fill('input[name="auth-password"]', os.environ["PA_PASSWORD"])
-            page.click('button[type="submit"], input[type="submit"]')
+            page.get_by_role("button", name="Log in").click()
             page.wait_for_load_state("networkidle")
             page.goto(f"https://www.pythonanywhere.com/user/{USER}/webapps/")
             page.get_by_text("Run until", exact=False).first.click()
