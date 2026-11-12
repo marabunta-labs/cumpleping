@@ -5,6 +5,7 @@ Variables: PA_USERNAME, PA_PASSWORD, PA_API_TOKEN, CRONJOB_API_KEY. Falla (exit 
 """
 import json
 import os
+import random
 import re
 import sys
 import urllib.request
@@ -29,6 +30,10 @@ def expiry():
     return date.fromisoformat(request(API, os.environ["PA_API_TOKEN"])["expiry"])
 
 
+def pause(page):
+    page.wait_for_timeout(random.randint(800, 3000))
+
+
 def extend_pythonanywhere():
     before = expiry()
     print(f"Caducidad antes: {before}")
@@ -37,11 +42,16 @@ def extend_pythonanywhere():
         page = browser.new_page()
         try:
             page.goto("https://www.pythonanywhere.com/login/")
-            page.fill('input[name="auth-username"]', USER)
-            page.fill('input[name="auth-password"]', os.environ["PA_PASSWORD"])
+            pause(page)
+            page.type('input[name="auth-username"]', USER, delay=random.randint(40, 120))
+            pause(page)
+            page.type('input[name="auth-password"]', os.environ["PA_PASSWORD"], delay=random.randint(40, 120))
+            pause(page)
             page.get_by_role("button", name="Log in").click()
             page.wait_for_load_state("networkidle")
+            pause(page)
             page.goto(f"https://www.pythonanywhere.com/user/{USER}/webapps/")
+            pause(page)
             page.get_by_role("button", name=re.compile("Run until")).first.click()
             page.wait_for_load_state("networkidle")
             page.screenshot(path="keepalive-last.png", full_page=True)

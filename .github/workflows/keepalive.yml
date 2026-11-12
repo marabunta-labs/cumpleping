@@ -1,9 +1,9 @@
 # Mantiene Cumpleping activo: la web app gratuita de PythonAnywhere caduca cada mes si nadie pulsa
-# "Run until 1 month from today". Este workflow lo pulsa cada semana, comprueba la web y reactiva el job de cron-job.org.
+# "Run until 1 month from today". Este workflow lo pulsa el 1 y el 15 de cada mes (con un retraso aleatorio de hasta 3 h), comprueba la web y reactiva el job de cron-job.org.
 # Si algo falla, el run sale en rojo y GitHub avisa por email. Secretos: PA_USERNAME, PA_PASSWORD, PA_API_TOKEN, CRONJOB_API_KEY.
 name: keepalive
 on:
-  schedule: [{ cron: '23 6 * * 1' }]
+  schedule: [{ cron: '17 5 1,15 * *' }]
   workflow_dispatch:
 permissions:
   actions: write
@@ -11,6 +11,9 @@ jobs:
   keepalive:
     runs-on: ubuntu-latest
     steps:
+      - name: Retraso aleatorio (solo en ejecuciones programadas)
+        if: github.event_name == 'schedule'
+        run: sleep $((RANDOM % 10800))
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
